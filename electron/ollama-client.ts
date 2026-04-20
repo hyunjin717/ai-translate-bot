@@ -59,6 +59,86 @@ function buildImagePrompt(targetLang: string): string {
   ].join('\n')
 }
 
+/**
+ * 스트리밍 응답에서 thinking/reasoning 블록을 걸러내는 파서.
+ * - Gemma 4: `<|channel>thought ... <channel|>`
+ * - 일반 reasoning 모델: `<think> ... </think>`
+ * 태그 밖 텍스트만 onOutput으로 내보내며, 태그가 청크 경계에 걸칠 수 있어 부분 일치 여유분을 남긴다.
+ */
+export class ThinkingFilterStream {
+  private static readonly TAGS: Array<{ open: string; close: string }> = [
+    { open: '<|channel>thought', close: '<channel|>' },
+    { open: '<think>', close: '</think>' }
+  ]
+  private static readonly MAX_OPEN_LEN = Math.max(
+    ...ThinkingFilterStream.TAGS.map((t) => t.open.length)
+  )
+
+  private buffer = ''
+  private inThinking = false
+  private currentClose = ''
+
+  constructor(private onOutput: (chunk: string) => void) {}
+
+  feed(chunk: string): void {
+    this.buffer += chunk
+    this.drain()
+  }
+
+  /** 스트림 종료 시 남은 버퍼를 내보낸다 (thinking 내부면 폐기) */
+  flush(): void {
+    if (!this.inThinking && this.buffer) {
+      this.onOutput(this.buffer)
+    }
+    this.buffer = ''
+  }
+
+  private drain(): void {
+    while (true) {
+      if (this.inThinking) {
+        const idx = this.buffer.indexOf(this.currentClose)
+        if (idx !== -1) {
+          this.buffer = this.buffer.slice(idx + this.currentClose.length)
+          this.inThinking = false
+          continue
+        }
+        // 닫힘 태그 부분 일치 대비 여유분만 남기고 폐기
+        const keep = this.currentClose.length - 1
+        if (this.buffer.length > keep) {
+          this.buffer = this.buffer.slice(this.buffer.length - keep)
+        }
+        return
+      }
+
+      let earliestIdx = -1
+      let matched: { open: string; close: string } | null = null
+      for (const tag of ThinkingFilterStream.TAGS) {
+        const idx = this.buffer.indexOf(tag.open)
+        if (idx !== -1 && (earliestIdx === -1 || idx < earliestIdx)) {
+          earliestIdx = idx
+          matched = tag
+        }
+      }
+
+      if (matched && earliestIdx !== -1) {
+        if (earliestIdx > 0) this.onOutput(this.buffer.slice(0, earliestIdx))
+        this.buffer = this.buffer.slice(earliestIdx + matched.open.length)
+        this.inThinking = true
+        this.currentClose = matched.close
+        continue
+      }
+
+      // 열림 태그 없음 — 부분 일치 여유분만 남기고 송출
+      const keep = ThinkingFilterStream.MAX_OPEN_LEN - 1
+      if (this.buffer.length > keep) {
+        this.onOutput(this.buffer.slice(0, this.buffer.length - keep))
+        this.buffer = this.buffer.slice(this.buffer.length - keep)
+      }
+      return
+    }
+  }
+}
+
 /** 응답에서 <EXTRACTED>와 <TRANSLATED> 태그를 파싱 */
 function parseImageResponse(text: string): { extracted: string; translated: string } | null {
   const extractedMatch = text.match(/<EXTRACTED>([\s\S]*?)<\/EXTRACTED>/)
@@ -203,7 +283,11 @@ export async function translateText(
 
   window.webContents.send('translate:source', text)
 
-  let fullText = ''
+  let cleanText = ''
+  const filter = new ThinkingFilterStream((chunk) => {
+    cleanText += chunk
+    window.webContents.send('translate:stream-chunk', chunk)
+  })
   const model = getModel()
 
   try {
@@ -216,12 +300,12 @@ export async function translateText(
     })
 
     for await (const part of response) {
-      fullText += part.response
-      window.webContents.send('translate:stream-chunk', part.response)
+      if (part.response) filter.feed(part.response)
     }
+    filter.flush()
 
-    window.webContents.send('translate:complete', fullText)
-    saveTranslation(text, fullText, 'auto', targetLang, model)
+    window.webContents.send('translate:complete', cleanText)
+    saveTranslation(text, cleanText, 'auto', targetLang, model)
   } catch (err: unknown) {
     handleOllamaError(window, err)
   }
