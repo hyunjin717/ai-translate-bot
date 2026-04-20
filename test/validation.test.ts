@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-const MAX_INPUT_LENGTH = 8000
+const MAX_INPUT_LENGTH = 16000
 
 function validateInput(text: string): { valid: boolean; error?: string } {
   if (!text || text.trim().length === 0) {
@@ -39,7 +39,7 @@ describe('Input validation', () => {
     const text = 'a'.repeat(MAX_INPUT_LENGTH + 1)
     const result = validateInput(text)
     expect(result.valid).toBe(false)
-    expect(result.error).toContain('8,000')
+    expect(result.error).toContain('16,000')
   })
 
   it('accepts Korean text', () => {

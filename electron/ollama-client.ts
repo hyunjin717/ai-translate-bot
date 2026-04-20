@@ -4,7 +4,7 @@ import { saveTranslation } from './db'
 import { getModel, getThinking } from './settings'
 
 const ollama = new Ollama({ host: 'http://localhost:11434' })
-const MAX_INPUT_LENGTH = 8000
+const MAX_INPUT_LENGTH = 16000
 const KEEP_ALIVE = '30m'
 const MAX_RETRIES = 2
 
