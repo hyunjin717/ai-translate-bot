@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<body>
+<canvas id="c16" width="16" height="16"></canvas>
+<canvas id="c32" width="32" height="32"></canvas>
+<canvas id="c512" width="512" height="512"></canvas>
+<script>
+// "번" 글자의 단순화된 형태 대신, "A→가" 컨셉의 미니멀 아이콘
+// 메뉴바용: 16x16 흰색 템플릿
+
+function drawIcon(canvas, size) {
+  const ctx = canvas.getContext('2d');
+  const s = size / 16; // scale factor
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.2 * s;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // "A" 글자 (왼쪽)
+  ctx.font = `bold ${9 * s}px -apple-system, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('A', 5 * s, 8 * s);
+
+  // 화살표 (→)
+  ctx.beginPath();
+  ctx.moveTo(8.5 * s, 8 * s);
+  ctx.lineTo(11 * s, 8 * s);
+  ctx.moveTo(9.5 * s, 6 * s);
+  ctx.lineTo(11 * s, 8 * s);
+  ctx.lineTo(9.5 * s, 10 * s);
+  ctx.stroke();
+
+  // "가" 힌트 (오른쪽, 작게)
+  ctx.font = `bold ${7 * s}px -apple-system, sans-serif`;
+  ctx.fillText('가', 13.5 * s, 8 * s);
+}
+
+drawIcon(document.getElementById('c16'), 16);
+drawIcon(document.getElementById('c32'), 32);
+
+// 512x512 앱 아이콘 (둥근 사각형 배경 + 아이콘)
+const c512 = document.getElementById('c512');
+const ctx = c512.getContext('2d');
+const size = 512;
+
+// 둥근 사각형 배경
+const radius = 100;
+ctx.beginPath();
+ctx.roundRect(0, 0, size, size, radius);
+ctx.fillStyle = '#1e1e1e';
+ctx.fill();
+
+// 중앙에 아이콘 크게 그리기
+ctx.fillStyle = '#ffffff';
+ctx.strokeStyle = '#ffffff';
+ctx.lineWidth = 8;
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+
+ctx.font = 'bold 160px -apple-system, sans-serif';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText('A', 155, 270);
+
+// 화살표
+ctx.beginPath();
+ctx.moveTo(230, 256);
+ctx.lineTo(310, 256);
+ctx.moveTo(280, 226);
+ctx.lineTo(310, 256);
+ctx.lineTo(280, 286);
+ctx.stroke();
+
+// "가"
+ctx.fillStyle = '#007AFF';
+ctx.font = 'bold 130px -apple-system, sans-serif';
+ctx.fillText('가', 395, 270);
+
+// 다운로드 링크 생성
+document.body.innerHTML += '<br><br>';
+['c16','c32','c512'].forEach(id => {
+  const link = document.createElement('a');
+  link.download = id.replace('c','icon-') + '.png';
+  link.href = document.getElementById(id).toDataURL('image/png');
+  link.textContent = link.download;
+  link.style.margin = '10px';
+  document.body.appendChild(link);
+});
+</script>
+</body>
+</html>

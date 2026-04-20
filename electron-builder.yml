@@ -1,0 +1,35 @@
+appId: com.ai-translate-bot
+productName: AI Translate Bot
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron/*'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+extraResources:
+  - from: resources
+    to: resources
+    filter:
+      - 'trayTemplate.png'
+      - 'trayTemplate@2x.png'
+      - 'icon.png'
+mac:
+  icon: resources/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  entitlementsInherit: build/entitlements.mac.plist
+  category: public.app-category.productivity
+dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
