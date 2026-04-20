@@ -24,6 +24,10 @@ export function useTranslation() {
       }))
     })
 
+    const unsubReset = window.api.translate.onStreamReset(() => {
+      setState((prev) => ({ ...prev, status: 'streaming', translatedText: '' }))
+    })
+
     const unsubComplete = window.api.translate.onComplete((fullText) => {
       setState((prev) => ({ ...prev, status: 'complete', translatedText: fullText }))
     })
@@ -34,6 +38,7 @@ export function useTranslation() {
 
     return () => {
       unsubChunk()
+      unsubReset()
       unsubComplete()
       unsubError()
     }

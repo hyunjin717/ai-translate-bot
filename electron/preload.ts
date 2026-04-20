@@ -27,6 +27,11 @@ const api = {
       ipcRenderer.on('translate:stream-chunk', listener)
       return () => ipcRenderer.removeListener('translate:stream-chunk', listener)
     },
+    onStreamReset: (cb: () => void) => {
+      const listener = () => cb()
+      ipcRenderer.on('translate:stream-reset', listener)
+      return () => ipcRenderer.removeListener('translate:stream-reset', listener)
+    },
     onComplete: (cb: (fullText: string) => void) => {
       const listener = (_: Electron.IpcRendererEvent, text: string) => cb(text)
       ipcRenderer.on('translate:complete', listener)

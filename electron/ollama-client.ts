@@ -63,22 +63,31 @@ function buildImagePrompt(targetLang: string): string {
  * 스트리밍 응답에서 thinking/reasoning 블록을 걸러내는 파서.
  * - Gemma 4: `<|channel>thought ... <channel|>`
  * - 일반 reasoning 모델: `<think> ... </think>`
- * 태그 밖 텍스트만 onOutput으로 내보내며, 태그가 청크 경계에 걸칠 수 있어 부분 일치 여유분을 남긴다.
+ *
+ * 동작:
+ * - 기본은 passthrough. 태그 밖 텍스트는 onOutput 으로 즉시 송출.
+ * - 열림 태그 감지 → suppress 모드 진입, 닫힘 태그까지 폐기.
+ * - Ollama가 열림 토큰을 삼키고 닫힘 토큰만 응답에 흘리는 경우가 있어, passthrough 상태에서 닫힘 태그를
+ *   단독으로 만나면 "앞부분 전체가 thinking이었다"로 간주하여 onReset 을 호출해 UI 누적을 비우고,
+ *   태그 이후부터 다시 passthrough 한다.
  */
 export class ThinkingFilterStream {
   private static readonly TAGS: Array<{ open: string; close: string }> = [
     { open: '<|channel>thought', close: '<channel|>' },
     { open: '<think>', close: '</think>' }
   ]
-  private static readonly MAX_OPEN_LEN = Math.max(
-    ...ThinkingFilterStream.TAGS.map((t) => t.open.length)
+  private static readonly MAX_TAG_LEN = Math.max(
+    ...ThinkingFilterStream.TAGS.flatMap((t) => [t.open.length, t.close.length])
   )
 
   private buffer = ''
   private inThinking = false
   private currentClose = ''
 
-  constructor(private onOutput: (chunk: string) => void) {}
+  constructor(
+    private onOutput: (chunk: string) => void,
+    private onReset?: () => void
+  ) {}
 
   feed(chunk: string): void {
     this.buffer += chunk
@@ -102,7 +111,6 @@ export class ThinkingFilterStream {
           this.inThinking = false
           continue
         }
-        // 닫힘 태그 부분 일치 대비 여유분만 남기고 폐기
         const keep = this.currentClose.length - 1
         if (this.buffer.length > keep) {
           this.buffer = this.buffer.slice(this.buffer.length - keep)
@@ -110,26 +118,44 @@ export class ThinkingFilterStream {
         return
       }
 
+      // passthrough 상태: 열림/닫힘 태그 중 가장 빠른 것을 찾는다.
       let earliestIdx = -1
-      let matched: { open: string; close: string } | null = null
+      let earliestTag: string = ''
+      let earliestIsOpen = false
+      let earliestClose = ''
+
       for (const tag of ThinkingFilterStream.TAGS) {
-        const idx = this.buffer.indexOf(tag.open)
-        if (idx !== -1 && (earliestIdx === -1 || idx < earliestIdx)) {
-          earliestIdx = idx
-          matched = tag
+        const openIdx = this.buffer.indexOf(tag.open)
+        if (openIdx !== -1 && (earliestIdx === -1 || openIdx < earliestIdx)) {
+          earliestIdx = openIdx
+          earliestTag = tag.open
+          earliestIsOpen = true
+          earliestClose = tag.close
+        }
+        const closeIdx = this.buffer.indexOf(tag.close)
+        if (closeIdx !== -1 && (earliestIdx === -1 || closeIdx < earliestIdx)) {
+          earliestIdx = closeIdx
+          earliestTag = tag.close
+          earliestIsOpen = false
+          earliestClose = ''
         }
       }
 
-      if (matched && earliestIdx !== -1) {
-        if (earliestIdx > 0) this.onOutput(this.buffer.slice(0, earliestIdx))
-        this.buffer = this.buffer.slice(earliestIdx + matched.open.length)
-        this.inThinking = true
-        this.currentClose = matched.close
+      if (earliestIdx !== -1) {
+        if (earliestIsOpen) {
+          if (earliestIdx > 0) this.onOutput(this.buffer.slice(0, earliestIdx))
+          this.buffer = this.buffer.slice(earliestIdx + earliestTag.length)
+          this.inThinking = true
+          this.currentClose = earliestClose
+          continue
+        }
+        // 단독 닫힘 태그 — 여태 UI에 흘려보낸 thinking 을 비우고 뒤부터 재개
+        this.onReset?.()
+        this.buffer = this.buffer.slice(earliestIdx + earliestTag.length)
         continue
       }
 
-      // 열림 태그 없음 — 부분 일치 여유분만 남기고 송출
-      const keep = ThinkingFilterStream.MAX_OPEN_LEN - 1
+      const keep = ThinkingFilterStream.MAX_TAG_LEN - 1
       if (this.buffer.length > keep) {
         this.onOutput(this.buffer.slice(0, this.buffer.length - keep))
         this.buffer = this.buffer.slice(this.buffer.length - keep)
@@ -284,10 +310,16 @@ export async function translateText(
   window.webContents.send('translate:source', text)
 
   let cleanText = ''
-  const filter = new ThinkingFilterStream((chunk) => {
-    cleanText += chunk
-    window.webContents.send('translate:stream-chunk', chunk)
-  })
+  const filter = new ThinkingFilterStream(
+    (chunk) => {
+      cleanText += chunk
+      window.webContents.send('translate:stream-chunk', chunk)
+    },
+    () => {
+      cleanText = ''
+      window.webContents.send('translate:stream-reset')
+    }
+  )
   const model = getModel()
 
   try {
