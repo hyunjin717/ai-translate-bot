@@ -32,6 +32,11 @@ const api = {
       ipcRenderer.on('translate:stream-reset', listener)
       return () => ipcRenderer.removeListener('translate:stream-reset', listener)
     },
+    onThinkingSkipped: (cb: () => void) => {
+      const listener = () => cb()
+      ipcRenderer.on('translate:thinking-skipped', listener)
+      return () => ipcRenderer.removeListener('translate:thinking-skipped', listener)
+    },
     onComplete: (cb: (fullText: string) => void) => {
       const listener = (_: Electron.IpcRendererEvent, text: string) => cb(text)
       ipcRenderer.on('translate:complete', listener)

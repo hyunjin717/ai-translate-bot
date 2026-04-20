@@ -7,6 +7,7 @@ type PopupState = {
   error: string
   isImage: boolean
   sourcePhase: 'idle' | 'extracting' | 'done'
+  thinkingSkipped: boolean
 }
 
 export function TranslatePopup() {
@@ -16,7 +17,8 @@ export function TranslatePopup() {
     translatedText: '',
     error: '',
     isImage: false,
-    sourcePhase: 'idle'
+    sourcePhase: 'idle',
+    thinkingSkipped: false
   })
   const [copied, setCopied] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -73,6 +75,10 @@ export function TranslatePopup() {
       }))
     })
 
+    const unsubReset = window.api.translate.onStreamReset(() => {
+      setState((prev) => ({ ...prev, status: 'streaming', translatedText: '' }))
+    })
+
     const unsubComplete = window.api.translate.onComplete((fullText) => {
       setState((prev) => ({ ...prev, status: 'complete', translatedText: fullText }))
     })
@@ -81,24 +87,30 @@ export function TranslatePopup() {
       setState((prev) => ({ ...prev, status: 'error', error }))
     })
 
+    const unsubThinkingSkipped = window.api.translate.onThinkingSkipped(() => {
+      setState((prev) => ({ ...prev, thinkingSkipped: true }))
+    })
+
     return () => {
       unsubChunk()
+      unsubReset()
       unsubComplete()
       unsubError()
+      unsubThinkingSkipped()
     }
   }, [])
 
   useEffect(() => {
     const unsubSource = window.api.translate.onSource((text) => {
-      setState({ status: 'loading', sourceText: text, translatedText: '', error: '', isImage: false, sourcePhase: 'idle' })
+      setState({ status: 'loading', sourceText: text, translatedText: '', error: '', isImage: false, sourcePhase: 'idle', thinkingSkipped: false })
       setCopied(false)
     })
     const unsubImageStart = window.api.translate.onImageStart(() => {
-      setState({ status: 'loading', sourceText: '', translatedText: '', error: '', isImage: true, sourcePhase: 'extracting' })
+      setState({ status: 'loading', sourceText: '', translatedText: '', error: '', isImage: true, sourcePhase: 'extracting', thinkingSkipped: false })
       setCopied(false)
     })
     const unsubRetry = window.api.translate.onRetry((attempt) => {
-      setState({ status: 'loading', sourceText: '', translatedText: '', error: '', isImage: true, sourcePhase: 'extracting' })
+      setState({ status: 'loading', sourceText: '', translatedText: '', error: '', isImage: true, sourcePhase: 'extracting', thinkingSkipped: false })
       setState((prev) => ({ ...prev, error: `재시도 중... (${attempt}/${2})` }))
     })
     const unsubSourceChunk = window.api.translate.onSourceChunk((chunk) => {
@@ -122,7 +134,7 @@ export function TranslatePopup() {
 
   const handleClose = useCallback(() => {
     window.api.window.close()
-    setState({ status: 'idle', sourceText: '', translatedText: '', error: '', isImage: false, sourcePhase: 'idle' })
+    setState({ status: 'idle', sourceText: '', translatedText: '', error: '', isImage: false, sourcePhase: 'idle', thinkingSkipped: false })
   }, [])
 
   const handleCopy = useCallback(() => {
@@ -214,6 +226,16 @@ export function TranslatePopup() {
             {state.status === 'streaming' && state.translatedText && (
               <span className="animate-blink text-accent">▍</span>
             )}
+          </p>
+        )}
+
+        {state.status === 'complete' && state.thinkingSkipped && (
+          <p className="mt-sm text-2xs text-[#888] flex items-start gap-xs">
+            <span aria-hidden>⚠️</span>
+            <span>
+              Thinking 설정은 켜져 있으나 이번 번역에서는 모델이 추론을 건너뛰었습니다.
+              Ollama/Gemma 4 조합의 알려진 간헐적 이슈로, 다시 시도하면 반영될 수 있습니다.
+            </span>
           </p>
         )}
 

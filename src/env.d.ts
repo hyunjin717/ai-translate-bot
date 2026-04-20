@@ -18,6 +18,7 @@ interface Window {
       onSource: (cb: (text: string) => void) => () => void
       onStreamChunk: (cb: (chunk: string) => void) => () => void
       onStreamReset: (cb: () => void) => () => void
+      onThinkingSkipped: (cb: () => void) => () => void
       onComplete: (cb: (fullText: string) => void) => () => void
       onError: (cb: (error: string) => void) => () => void
       onImageStart: (cb: () => void) => () => void

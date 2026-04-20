@@ -5,6 +5,7 @@ type TranslationState = {
   sourceText: string
   translatedText: string
   error: string
+  thinkingSkipped: boolean
 }
 
 export function useTranslation() {
@@ -12,7 +13,8 @@ export function useTranslation() {
     status: 'idle',
     sourceText: '',
     translatedText: '',
-    error: ''
+    error: '',
+    thinkingSkipped: false
   })
 
   useEffect(() => {
@@ -36,11 +38,16 @@ export function useTranslation() {
       setState((prev) => ({ ...prev, status: 'error', error }))
     })
 
+    const unsubThinkingSkipped = window.api.translate.onThinkingSkipped(() => {
+      setState((prev) => ({ ...prev, thinkingSkipped: true }))
+    })
+
     return () => {
       unsubChunk()
       unsubReset()
       unsubComplete()
       unsubError()
+      unsubThinkingSkipped()
     }
   }, [])
 
@@ -57,11 +64,11 @@ export function useTranslation() {
   }, [])
 
   const reset = useCallback(() => {
-    setState({ status: 'idle', sourceText: '', translatedText: '', error: '' })
+    setState({ status: 'idle', sourceText: '', translatedText: '', error: '', thinkingSkipped: false })
   }, [])
 
   const setSourceText = useCallback((text: string) => {
-    setState({ status: 'loading', sourceText: text, translatedText: '', error: '' })
+    setState({ status: 'loading', sourceText: text, translatedText: '', error: '', thinkingSkipped: false })
   }, [])
 
   return { ...state, reset, setSourceText }

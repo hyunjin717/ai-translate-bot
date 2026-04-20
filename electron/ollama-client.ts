@@ -1,4 +1,4 @@
-import { Ollama } from 'ollama'
+import { Ollama, type Message } from 'ollama'
 import { BrowserWindow } from 'electron'
 import { saveTranslation } from './db'
 import { getModel, getThinking } from './settings'
@@ -8,13 +8,45 @@ const MAX_INPUT_LENGTH = 16000
 const KEEP_ALIVE = '30m'
 const MAX_RETRIES = 2
 
-function buildPrompt(text: string, targetLang: string): string {
-  return `You are a professional translator. Translate the following text to ${targetLang}. Output ONLY the translation, no explanations or notes.\n\n${text}`
+/**
+ * Gemma 4 공식 가이드 준수.
+ * - thinking 제어: system prompt 첫 자리의 `<|think|>` 리터럴 토큰. 있으면 ON, 없으면 OFF.
+ * - Ollama 의 `think: true/false` 파라미터는 이론상 같은 효과여야 하지만, 현재(v0.21.0) Gemma 4 에서는 매핑이
+ *   간헐적으로 실패하는 것이 실측됐다. 따라서 안정적 제어를 위해 system 문자열에 리터럴을 직접 삽입한다.
+ * - chat API 를 써야 system 슬롯이 실제 주입되며 thinking reasoning 은 `part.message.thinking` 으로 분리된다.
+ */
+
+const THINK_TOKEN = '<|think|>'
+const TEXT_SYSTEM_PROMPT =
+  'You are a professional translator. Output ONLY the translation, no explanations or notes.'
+
+function buildTextMessages(text: string, targetLang: string, thinking: boolean): Message[] {
+  return [
+    { role: 'system', content: (thinking ? THINK_TOKEN : '') + TEXT_SYSTEM_PROMPT },
+    { role: 'user', content: `Translate the following text to ${targetLang}.\n\n${text}` }
+  ]
 }
 
-function buildImagePrompt(targetLang: string): string {
+/**
+ * thinking OFF 전용 경로. Ollama 의 gemma4 RENDERER 개입을 피하기 위해 raw:true 로 공식 Gemma 4 chat format 을
+ * 수동 구성한다. 실측상 이 경로에서는 `<|channel>thought` 블록이 일절 생성되지 않는다.
+ */
+function buildRawGemma4Prompt(text: string, targetLang: string): string {
   return [
-    'Look at the provided image. Extract all visible text and translate it.',
+    '<|turn>system',
+    TEXT_SYSTEM_PROMPT,
+    '<turn|>',
+    '<|turn>user',
+    `Translate the following text to ${targetLang}.\n\n${text}`,
+    '<turn|>',
+    '<|turn>model',
+    ''
+  ].join('\n')
+}
+
+function buildImageSystemPrompt(targetLang: string): string {
+  return [
+    'You extract text from images and translate it.',
     '',
     '## Step 1: Distinguish main text from furigana by SIZE',
     'CRITICAL: Japanese text has two visual layers:',
@@ -57,6 +89,18 @@ function buildImagePrompt(targetLang: string): string {
     '',
     'No commentary, no markdown, nothing outside the tags.'
   ].join('\n')
+}
+
+function buildImageMessages(imageBase64: string, targetLang: string): Message[] {
+  return [
+    // 이미지 번역은 정확도를 위해 항상 thinking ON
+    { role: 'system', content: THINK_TOKEN + buildImageSystemPrompt(targetLang) },
+    {
+      role: 'user',
+      content: `Extract the main text from this image and translate it into ${targetLang}.`,
+      images: [imageBase64]
+    }
+  ]
 }
 
 /**
@@ -283,7 +327,7 @@ function handleOllamaError(window: BrowserWindow, err: unknown): void {
 
 export async function unloadModel(model: string): Promise<void> {
   try {
-    await ollama.generate({ model, prompt: '', keep_alive: 0 })
+    await ollama.chat({ model, messages: [], keep_alive: 0 })
   } catch {
     // 모델이 이미 언로드되었거나 없는 경우 무시
   }
@@ -321,20 +365,56 @@ export async function translateText(
     }
   )
   const model = getModel()
+  const thinkingRequested = getThinking()
+  let sawThinking = false
+  let thinkingChars = 0
+  const started = Date.now()
+  const mode = thinkingRequested ? 'chat' : 'raw'
 
   try {
-    const response = await ollama.generate({
-      model,
-      prompt: buildPrompt(text, targetLang),
-      stream: true,
-      keep_alive: KEEP_ALIVE,
-      think: getThinking()
-    })
-
-    for await (const part of response) {
-      if (part.response) filter.feed(part.response)
+    if (thinkingRequested) {
+      // ON: chat API 의 Gemma 4 renderer 를 통해 thinking 을 활성화. thinking 토큰은 part.message.thinking 으로 분리됨.
+      const response = await ollama.chat({
+        model,
+        messages: buildTextMessages(text, targetLang, true),
+        stream: true,
+        keep_alive: KEEP_ALIVE
+      })
+      for await (const part of response) {
+        const t = part.message?.thinking
+        if (t) {
+          sawThinking = true
+          thinkingChars += t.length
+        }
+        const chunk = part.message?.content
+        if (chunk) filter.feed(chunk)
+      }
+    } else {
+      // OFF: raw:true + 수동 Gemma 4 format 으로 renderer 개입을 차단. thinking 이 모델 레벨에서 생성되지 않음.
+      const response = await ollama.generate({
+        model,
+        prompt: buildRawGemma4Prompt(text, targetLang),
+        raw: true,
+        stream: true,
+        keep_alive: KEEP_ALIVE
+      })
+      for await (const part of response) {
+        if (part.response) filter.feed(part.response)
+      }
     }
     filter.flush()
+
+    const ms = Date.now() - started
+    const mark = thinkingRequested === sawThinking ? '✓' : '⚠'
+    console.log(
+      `[translate] ${mark} mode=${mode} req=${thinkingRequested} actual=${sawThinking}` +
+        ` | thinking=${thinkingChars}ch | output=${cleanText.length}ch | ${ms}ms | ${model}`
+    )
+
+    // ON 요청인데 실제로는 thinking 이 수행되지 않은 경우 사용자에게 알린다
+    if (thinkingRequested && !sawThinking) {
+      window.webContents.send('translate:thinking-skipped')
+    }
 
     window.webContents.send('translate:complete', cleanText)
     saveTranslation(text, cleanText, 'auto', targetLang, model)
@@ -351,11 +431,10 @@ export async function translateImage(
   window.webContents.send('translate:image-start')
 
   const model = getModel()
-  const prompt = buildImagePrompt(targetLang)
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const fullText = await attemptImageTranslation(window, model, prompt, imageBase64)
+      const fullText = await attemptImageTranslation(window, model, imageBase64, targetLang)
 
       // 파싱 검증
       const parsed = parseImageResponse(fullText)
@@ -397,10 +476,13 @@ export async function translateImage(
 async function attemptImageTranslation(
   window: BrowserWindow,
   model: string,
-  prompt: string,
-  imageBase64: string
+  imageBase64: string,
+  targetLang: string
 ): Promise<string> {
   let fullText = ''
+  let sawThinking = false
+  let thinkingChars = 0
+  const started = Date.now()
 
   const parser = new StreamingTagParser({
     onSource: (chunk) => window.webContents.send('translate:source-chunk', chunk),
@@ -408,20 +490,31 @@ async function attemptImageTranslation(
     onTranslation: (chunk) => window.webContents.send('translate:stream-chunk', chunk)
   })
 
-  const response = await ollama.generate({
+  const response = await ollama.chat({
     model,
-    prompt,
-    images: [imageBase64],
+    messages: buildImageMessages(imageBase64, targetLang),
     stream: true,
-    keep_alive: KEEP_ALIVE,
-    think: true // 이미지 번역은 항상 thinking 사용
+    keep_alive: KEEP_ALIVE
   })
 
   for await (const part of response) {
-    if (!part.response) continue
-    fullText += part.response
-    parser.feed(part.response)
+    const t = part.message?.thinking
+    if (t) {
+      sawThinking = true
+      thinkingChars += t.length
+    }
+    const chunk = part.message?.content
+    if (!chunk) continue
+    fullText += chunk
+    parser.feed(chunk)
   }
+
+  const ms = Date.now() - started
+  const mark = sawThinking ? '✓' : '⚠'
+  console.log(
+    `[translate-image] ${mark} thinking requested=true actual=${sawThinking}` +
+      ` | thinking=${thinkingChars}ch | output=${fullText.length}ch | ${ms}ms | ${model}`
+  )
 
   return fullText
 }
