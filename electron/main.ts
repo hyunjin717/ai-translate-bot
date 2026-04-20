@@ -165,22 +165,31 @@ function showPopupAtCursor(sourceText: string): void {
     popupWindow = createPopupWindow()
   }
 
-  const cursor = screen.getCursorScreenPoint()
-  const display = screen.getDisplayNearestPoint(cursor)
-  const { bounds } = display
+  // 이미 보이는 상태면 기존 위치/크기를 유지하고 새 번역만 흘려보낸다.
+  const reuseExisting = popupWindow.isVisible()
 
-  let x = cursor.x - 200
-  let y = cursor.y + 8
+  if (!reuseExisting) {
+    const cursor = screen.getCursorScreenPoint()
+    const display = screen.getDisplayNearestPoint(cursor)
+    const { bounds } = display
 
-  if (x + 400 > bounds.x + bounds.width) x = bounds.x + bounds.width - 408
-  if (x < bounds.x) x = bounds.x + 8
-  if (y + 150 > bounds.y + bounds.height) y = cursor.y - 158
+    let x = cursor.x - 200
+    let y = cursor.y + 8
 
-  popupWindow.setBounds({ x, y, width: 420, height: 150 })
+    if (x + 400 > bounds.x + bounds.width) x = bounds.x + bounds.width - 408
+    if (x < bounds.x) x = bounds.x + 8
+    if (y + 150 > bounds.y + bounds.height) y = cursor.y - 158
+
+    popupWindow.setBounds({ x, y, width: 420, height: 150 })
+  }
+
   popupWindow.show()
   popupWindow.focus()
 
-  console.log(`[main] popup shown at (${x}, ${y}), text length: ${sourceText.length}`)
+  const { x: finalX, y: finalY } = popupWindow.getBounds()
+  console.log(
+    `[main] popup ${reuseExisting ? 'reused' : 'shown'} at (${finalX}, ${finalY}), text length: ${sourceText.length}`
+  )
   if (sourceText) {
     translateText(popupWindow, sourceText, getTargetLang())
   }
